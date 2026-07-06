@@ -90,27 +90,27 @@ wheels = [
 
 [[package]]
 name = "caesura-io-core"
-version = "1.0.2"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/2f/c2e6620c8f34e9728ae91db8a25f055136b74a5ead69f152a7a8d32cb33b/caesura_io_core-1.0.2.tar.gz", hash = "sha256:1cc3ec2e8ac6e8deb7533d282f39cd57505dc8ff2a381dd1f5feaf16518f9af3", size = 20749, upload-time = "2026-07-06T12:01:20.824Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5e/bc/17622d9b34d807da7cc3ba3aef32487f5dc0a4f016edc75a8f998a149657/caesura_io_core-1.0.4.tar.gz", hash = "sha256:ac820eaaa6e5097643bc3d9c29ac5bff09be3230f9f436c2d27168240e5f1e0d", size = 20745, upload-time = "2026-07-06T18:02:17.818Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/b8/5a26dd414749ee45f2ec0942b02d52434653922a0d4545157ababd5071bc/caesura_io_core-1.0.2-py3-none-any.whl", hash = "sha256:6df28c896537def3f1e0259166b3e9bb272738b71501e536b192b9ce8f5fff14", size = 21232, upload-time = "2026-07-06T12:01:17.901Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/6f/9a98f19bf957b52abb15aff1c5d1ba58e087f6ff672dfdc4a9298656374e/caesura_io_core-1.0.4-py3-none-any.whl", hash = "sha256:5fef10c475ef92d6af8e44a27ff9fbe5d2d53e08e81d75fd743dbb8eff6ed138", size = 21227, upload-time = "2026-07-06T18:02:15.529Z" },
 ]
 
 [[package]]
 name = "caesura-io-openai"
-version = "1.0.2"
+version = "1.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "caesura-io-core" },
     { name = "openai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/55/5a/33dc680a448a73934cd91f9a898118b0ac4a8ec0343d6fc367d8fc7a54d9/caesura_io_openai-1.0.2.tar.gz", hash = "sha256:4f69f8a31a745bffa2bdfb095ab3621bfdf70f01040d6541ab37be3e2a4624ff", size = 8406, upload-time = "2026-07-06T12:01:21.804Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/57/26450c266a08d1c6bd4c1a4bf24af2c2beb0ec56b2523c9456cf830902b7/caesura_io_openai-1.0.4.tar.gz", hash = "sha256:66404274959a3bf55efa3f11c240770da814d52b646506df8eea32c96473b0b0", size = 9046, upload-time = "2026-07-06T18:02:18.737Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f6/47/f98623aedff40961aaa4edc4a0682654672e08f5c1a0e7aee1ca2c6735a3/caesura_io_openai-1.0.2-py3-none-any.whl", hash = "sha256:55c56506a270f7479babb2094babaf021e65f696e2c3b9c924d5be0378209765", size = 7936, upload-time = "2026-07-06T12:01:19.502Z" },
+    { url = "https://files.pythonhosted.org/packages/de/bb/f9fb434a16ca4b7c631f2de4e7b87f8bef4aca026bec59e134c1f69fcd70/caesura_io_openai-1.0.4-py3-none-any.whl", hash = "sha256:1068e05553b36ee3a2389943449f2db3d50c13c5e75cd9fbfca664aac205ddea", size = 7942, upload-time = "2026-07-06T18:02:16.615Z" },
 ]
 
 [[package]]
@@ -205,7 +205,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "caesura-io-openai", specifier = ">=1.0.0" },
+    { name = "caesura-io-openai", specifier = ">=1.0.4" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "openai", specifier = ">=2.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
