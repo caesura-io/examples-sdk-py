@@ -1,0 +1,46 @@
+### Responses API (Primary Caesura wrapper)
+POST http://localhost:8000/v1/responses
+Content-Type: application/json
+
+{
+  "input": "Hello, I need help with my account",
+  "conversationId": "demo-session-1"
+}
+
+###
+
+### Streaming Responses API
+POST http://localhost:8000/v1/responses/stream
+Content-Type: application/json
+
+{
+  "input": "Can you explain your pricing?",
+  "conversationId": "demo-session-1"
+}
+
+###
+
+### Chat Completions
+POST http://localhost:8000/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-5.4-mini",
+  "messages": [{"role": "user", "content": "Hello, I need help with my account"}],
+  "user": "demo-session-2"
+}
+
+###
+
+### Streaming Chat Completions
+POST http://localhost:8000/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-5.4-mini",
+  "messages": [{"role": "user", "content": "Can you explain your pricing?"}],
+  "stream": true,
+  "user": "demo-session-2"
+}
+
+###
