@@ -11,3 +11,7 @@ __pycache__/
 .pytest_cache/
 dist/
 *.egg-info/
+
+# Local example data
+conversation.sqlite
+provider-requests.jsonl

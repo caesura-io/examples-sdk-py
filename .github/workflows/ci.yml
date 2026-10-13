@@ -7,12 +7,18 @@ on:
   schedule:
     - cron: '0 6 * * 1' # Weekly Monday 6am UTC — catches published SDK drift
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         example: [fastapi-openai-server]
+        python: ["3.10", "3.13"]
+        openai: [2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -23,20 +29,32 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install "${{ matrix.python }}"
 
       - name: Sync dependencies
-        run: uv sync
+        run: uv sync --locked --no-sources
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+        working-directory: examples/${{ matrix.example }}
+
+      - name: Exercise selected supported OpenAI major
+        run: uv pip install "openai>=${OPENAI_MAJOR},<$((OPENAI_MAJOR + 1))"
+        env:
+          OPENAI_MAJOR: ${{ matrix.openai }}
+        working-directory: examples/${{ matrix.example }}
+
+      - name: Formatting
+        run: uv run --no-sync ruff format --check . ../../scripts
         working-directory: examples/${{ matrix.example }}
 
       - name: Lint (ruff)
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check . ../../scripts
         working-directory: examples/${{ matrix.example }}
 
       - name: Type check (mypy)
-        run: uv run mypy .
+        run: uv run --no-sync mypy . ../../scripts
         working-directory: examples/${{ matrix.example }}
 
       - name: Test (pytest)
-        run: uv run pytest
+        run: uv run --no-sync pytest
         working-directory: examples/${{ matrix.example }}

@@ -1,46 +1,33 @@
-### Responses API (Primary Caesura wrapper)
+### Create once
+POST http://localhost:8000/caesura/conversations
+Content-Type: application/json
+
+{"name":"Python example"}
+
+> {%
+  client.assert(response.status === 201, "Creation failed");
+  client.global.set("conversationId", response.body.id);
+%}
+
+### First customer turn
 POST http://localhost:8000/v1/responses
 Content-Type: application/json
 
-{
-  "input": "Hello, I need help with my account",
-  "conversationId": "demo-session-1"
-}
+{"conversationId":"{{conversationId}}","input":[{"role":"user","content":"Can you help me prepare for a meeting?"}]}
 
-###
-
-### Streaming Responses API
-POST http://localhost:8000/v1/responses/stream
-Content-Type: application/json
-
-{
-  "input": "Can you explain your pricing?",
-  "conversationId": "demo-session-1"
-}
-
-###
-
-### Chat Completions
+### Continue the same conversation using Chat Completions
 POST http://localhost:8000/v1/chat/completions
 Content-Type: application/json
 
 {
-  "model": "gpt-5.4-mini",
-  "messages": [{"role": "user", "content": "Hello, I need help with my account"}],
-  "user": "demo-session-2"
+  "conversationId":"{{conversationId}}",
+  "messages":[
+    {"role":"user","content":"Can you help me prepare for a meeting?"},
+    {"role":"assistant","content":"What is the meeting about?"},
+    {"role":"user","content":"Planning our next release."}
+  ],
+  "stream":true
 }
 
-###
-
-### Streaming Chat Completions
-POST http://localhost:8000/v1/chat/completions
-Content-Type: application/json
-
-{
-  "model": "gpt-5.4-mini",
-  "messages": [{"role": "user", "content": "Can you explain your pricing?"}],
-  "stream": true,
-  "user": "demo-session-2"
-}
-
-###
+### Fetch saved customer analyses (not a full transcript archive)
+GET http://localhost:8000/caesura/conversations/{{conversationId}}

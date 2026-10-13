@@ -1,105 +1,71 @@
-# FastAPI Server with `caesura-io-openai`
+# CaesuraO + FastAPI
 
-A minimal FastAPI backend exposing standard OpenAI-compatible HTTP endpoints.
-
-**What this shows:** A server-side integration wrapping the official OpenAI Python SDK, logging injected recommendations and credit usage to the console. It uses `gpt-5.4-mini` via the new Responses API and the older Chat Completions API.
-
-**When to use it:** Use the `caesura-io-openai` package when you are building a headless service, backend worker, or an application that already uses the official `openai` package directly.
-
-## Prerequisites
-
-- Python 3.10 or higher
-- [uv](https://docs.astral.sh/uv/) — fast Python package manager
-- An OpenAI API key
-- A Caesura API key
-
-## Setup
-
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-2. Fill in your `OPENAI_API_KEY` and `CAESURA_API_KEY` in `.env`.
-3. Install dependencies:
-   ```bash
-   uv sync
-   ```
+Create a CaesuraO conversation, then reuse its ID with OpenAI Responses or Chat
+Completions. New customer turns receive private guidance; tool continuations do not
+trigger another analysis.
 
 ## Run
 
-```bash
+Requires Python 3.10+ and uv. Install the published SDK 3.0.0 packages using the
+committed lockfile; no sibling checkout is required.
+
+```sh
+cp .env.example .env
+# Set OPENAI_API_KEY and CAESURA_API_KEY.
+uv sync --locked
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
-The server starts at `http://localhost:8000`.
+Open `requests.http` for a create-and-reuse flow. API credentials stay on the server.
+The example has no caller authentication; add application authentication and
+conversation ownership checks before deploying it publicly.
 
-## Endpoints
+| Route | Request |
+|---|---|
+| `POST /caesura/conversations` | Optional `name`, `calendarId`, `eventId`; returns `{ "id": "..." }` |
+| `GET /caesura/conversations/{id}` | Retrieve saved analysis rows |
+| `POST /v1/responses` | `input`, `conversationId`, optional `model` |
+| `POST /v1/responses/stream` | Same input, SSE output |
+| `POST /v1/chat/completions` | `messages`, `conversationId`, optional `model`, `stream` |
 
-### Responses API
+Both model APIs require `conversationId`, including when `CAESURA_PERSIST=false`.
+Create once and save the returned ID; starting a new conversation requires explicit
+creation. An ID does not load previous messages. Supply growing dialogue history
+with ordinary OpenAI `user`/`assistant` roles and append generated replies yourself.
 
-```bash
-curl -X POST http://localhost:8000/v1/responses \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Hello, I need help with my account", "conversationId": "demo-session-1"}'
+`CAESURA_MODE=sync` waits for guidance for the current model call; `async` makes it
+available to later calls. This setting is independent of using AsyncOpenAI.
+`CAESURA_PERSIST=true` saves analyzed customer messages and analyses, not a complete
+transcript. Use the SDK's `persist_transcript` hook for an application-owned archive.
+The conversation belongs to the user associated with `CAESURA_API_KEY`. On the
+Conversations page, API-created conversations use the API source
+type. Empty conversations are hidden by default until a saved analysis updates
+their duration; creating an ID alone or using `CAESURA_PERSIST=false` does not
+make a populated conversation appear there.
+
+This minimal server uses the SDK's history-based customer detection. For retries,
+truncated histories, or RAG supplied as user messages, pass stable `CustomerTurn`
+IDs through `caesura_context` as shown in the
+[customer-turn guide](https://github.com/caesura-io/sdk-py/blob/main/docs/application-integration.md#select-genuine-customer-turns).
+Distinct messages with identical text need
+distinct IDs; tool continuations reuse an ID or explicitly select no customer turn.
+
+Analysis errors are logged and model calls continue by default. Applications requiring
+guidance should set `failure_policy="raise"` with `mode="sync"`.
+
+## Checks
+
+```sh
+uv run pytest -q
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy .
 ```
 
-### Streaming Responses API
+Tests mock both services. The optional command below creates real conversations and
+consumes API credits. It verifies four customer analyses with assistant background,
+using Responses, Chat, or both; it does not claim that HTTP persistence saves replies.
 
-```bash
-curl -N -X POST http://localhost:8000/v1/responses/stream \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Can you explain your pricing?", "conversationId": "demo-session-1"}'
+```sh
+uv run python -m scripts.check_conversations --api all
 ```
-
-### Chat Completions
-
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.4-mini",
-    "messages": [{"role": "user", "content": "Hello, I need help with my account"}],
-    "user": "demo-session-2"
-  }'
-```
-
-### Streaming Chat Completions
-
-```bash
-curl -N -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.4-mini",
-    "messages": [{"role": "user", "content": "Can you explain your pricing?"}],
-    "stream": true,
-    "user": "demo-session-2"
-  }'
-```
-
-## What you'll see
-
-You can use the included `requests.http` file to ping the server.
-In your console, you will see FastAPI/uvicorn startup logs alongside detailed Caesura lifecycle events:
-- The requests sent to Caesura's backend for analysis
-- The resulting recommendations
-- When a recommendation is injected into your OpenAI request
-
-## Async vs Sync Observation Mode
-
-Caesura's `mode` setting (`"async"` or `"sync"`) controls whether recommendation generation **blocks the model call**. It is independent of whether you use Python's sync `OpenAI` or async `AsyncOpenAI` client.
-
-| Mode | Behavior | Trade-off |
-|------|----------|-----------|
-| `async` (default) | Observation runs in the background via `asyncio.create_task`. Recommendations appear on the **next** turn. | No added latency to the LLM call; one-turn lag before recommendations are injected. |
-| `sync` | Observation runs inline before the LLM call. Recommendations are injected into the **current** turn. | Adds Caesura's analysis latency to every model call. |
-
-This example uses `sync` mode by default, meaning recommendations are injected immediately on the current turn. To switch to the non-blocking mode, set `CAESURA_MODE=async` in your `.env` file.
-
-> **Naming collision note:** Python's `AsyncOpenAI` refers to the *async HTTP client* from the `openai` package. Caesura's `mode="async"` refers to the *observation mode* — whether the analysis call blocks the LLM request. These are completely independent concepts.
-
-## Data Flow
-
-Because Caesura operates as a middleware/proxy, it is important to understand where your data goes:
-- **Provider API Key (OpenAI):** Sent *only* to OpenAI. It is never sent to the Caesura backend.
-- **Conversation Content:** Sent to the Caesura backend for analysis, and to the provider for language model generation.
-- **Caesura API Key:** Sent *only* to the Caesura backend.

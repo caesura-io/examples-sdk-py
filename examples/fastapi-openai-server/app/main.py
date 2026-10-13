@@ -1,8 +1,8 @@
-"""FastAPI application exposing OpenAI-compatible endpoints with Caesura.
+"""FastAPI application exposing OpenAI-compatible endpoints with CaesuraO.
 
-Endpoints mirror the JS Fastify example so the two servers are
-interchangeable from a client's perspective:
+Create a CaesuraO conversation, then reuse its ID on the model endpoints:
 
+  POST /caesura/conversations — Explicit CaesuraO conversation creation
   POST /v1/responses          — Responses API (non-streaming)
   POST /v1/responses/stream   — Responses API (streaming SSE)
   POST /v1/chat/completions   — Chat Completions (non-streaming + streaming)
@@ -11,19 +11,75 @@ interchangeable from a client's perspective:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.backend import fetch_conversation
 from app.caesura_client import openai
-from app.models import ChatCompletionRequest, ResponsesRequest
+from app.models import ChatCompletionRequest, ConversationCreateRequest, ResponsesRequest
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        await openai.close()
+
 
 app = FastAPI(
-    title="Caesura + OpenAI Example",
+    lifespan=lifespan,
+    title="CaesuraO + OpenAI Example",
     description="Minimal FastAPI server demonstrating caesura-io-openai integration.",
 )
+
+
+def resolve_conversation_id(conversation_id: str | None) -> str:
+    if conversation_id and conversation_id.strip():
+        return conversation_id
+    raise HTTPException(
+        status_code=422,
+        detail="An existing CaesuraO conversation ID is required in conversationId.",
+    )
+
+
+@app.post("/caesura/conversations", status_code=201)
+async def create_conversation(body: ConversationCreateRequest) -> dict[str, str]:
+    """Create once through the CaesuraO SDK and return the ID to reuse on later turns."""
+    try:
+        conversation_id = await openai.create_conversation(
+            name=body.name,
+            calendar_id=body.calendar_id,
+            event_id=body.event_id,
+        )
+    except Exception as exc:
+        logger.exception("CaesuraO conversation creation failed")
+        raise HTTPException(
+            status_code=502, detail="CaesuraO conversation creation failed. Check server logs."
+        ) from exc
+    return {"id": conversation_id}
+
+
+@app.get("/caesura/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str) -> dict[str, Any]:
+    """Fetch saved dialogue and analysis rows using the server's CaesuraO key."""
+    try:
+        return await fetch_conversation(conversation_id)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        raise HTTPException(
+            status_code=status if 400 <= status < 500 else 502, detail="Could not fetch the CaesuraO conversation."
+        ) from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Could not fetch the CaesuraO conversation.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -35,9 +91,9 @@ app = FastAPI(
 async def create_response(body: ResponsesRequest) -> Any:
     """Responses API — non-streaming.
 
-    The Caesura wrapper intercepts this call to:
-      1. Observe the user input and send it to the Caesura backend for analysis.
-      2. Inject any buffered recommendations into the ``instructions`` field.
+    The CaesuraO wrapper intercepts this call to:
+      1. Observe the user input and send it to the CaesuraO backend for analysis.
+      2. Inject eligible guidance into ``input``; add the skill prompt to ``instructions``.
 
     In sync mode (default in this example), step 1 pauses the request until
     the analysis finishes, ensuring recommendations appear immediately on the
@@ -46,7 +102,7 @@ async def create_response(body: ResponsesRequest) -> Any:
     response = await openai.responses.create(
         model=body.model,
         input=body.input,
-        caesura_conversation_id=body.conversation_id,
+        caesura_conversation_id=resolve_conversation_id(body.conversation_id),
     )
     return response
 
@@ -58,12 +114,13 @@ async def create_response_stream(body: ResponsesRequest) -> StreamingResponse:
         model=body.model,
         input=body.input,
         stream=True,
-        caesura_conversation_id=body.conversation_id,
+        caesura_conversation_id=resolve_conversation_id(body.conversation_id),
     )
 
     async def event_generator() -> AsyncIterator[str]:
-        async for event in stream:
-            yield f"data: {json.dumps(event.model_dump() if hasattr(event, 'model_dump') else event)}\n\n"
+        async with stream:
+            async for event in stream:
+                yield f"data: {json.dumps(event.model_dump() if hasattr(event, 'model_dump') else event)}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -76,24 +133,9 @@ async def create_response_stream(body: ResponsesRequest) -> StreamingResponse:
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(body: ChatCompletionRequest) -> Any:
-    """Classic OpenAI Chat Completions API.
-
-    The ``user`` field from the request body is used as the Caesura
-    ``conversationId``, matching the convention in the JS example.  This
-    lets you track multi-turn conversations across requests.
-
-    The Caesura wrapper:
-      1. Collects user/assistant messages and sends them for analysis.
-      2. Injects any buffered recommendations into the messages array
-         (placement depends on ``InjectConfig``; default is after the
-         last analyzed message).
-
-    In sync mode (default in this example), the analysis is awaited inline
-    so recommendations can be injected immediately. If switched to async mode,
-    the analysis fires in the background and gets injected on the next turn.
-    """
-    conversation_id = body.user or "demo"
-    messages = [m.model_dump(exclude_none=True) for m in body.messages]
+    """Chat Completions using the same conversationId as Responses."""
+    conversation_id = resolve_conversation_id(body.conversation_id)
+    messages = [m.model_dump(exclude_none=True, by_alias=True) for m in body.messages]
 
     if body.stream:
         stream = await openai.chat.completions.create(
@@ -104,8 +146,9 @@ async def create_chat_completion(body: ChatCompletionRequest) -> Any:
         )
 
         async def event_generator() -> AsyncIterator[str]:
-            async for event in stream:
-                yield f"data: {json.dumps(event.model_dump() if hasattr(event, 'model_dump') else event)}\n\n"
+            async with stream:
+                async for event in stream:
+                    yield f"data: {json.dumps(event.model_dump() if hasattr(event, 'model_dump') else event)}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
