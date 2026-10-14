@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+from caesura_core import TranscriptMessage
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -60,12 +61,29 @@ async def create_conversation(body: ConversationCreateRequest) -> dict[str, str]
             calendar_id=body.calendar_id,
             event_id=body.event_id,
         )
+        if conversation_id is None:
+            raise RuntimeError("CaesuraO did not create a conversation")
     except Exception as exc:
         logger.exception("CaesuraO conversation creation failed")
         raise HTTPException(
             status_code=502, detail="CaesuraO conversation creation failed. Check server logs."
         ) from exc
-    return {"id": conversation_id}
+    if body.greeting:
+        try:
+            await openai.persist_messages(
+                conversation_id,
+                [TranscriptMessage("greeting", "agent", body.greeting)],
+            )
+        except Exception as exc:
+            logger.exception("CaesuraO greeting persistence failed")
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "Conversation created but greeting could not be saved.",
+                    "conversationId": conversation_id,
+                },
+            ) from exc
+    return {"id": conversation_id, **({"greeting": body.greeting} if body.greeting else {})}
 
 
 @app.get("/caesura/conversations/{conversation_id}")

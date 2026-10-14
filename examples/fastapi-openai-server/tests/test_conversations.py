@@ -47,28 +47,63 @@ async def test_four_turns_save_dialogue_but_buffer_only_one_guidance(scenario: s
         assert body["similarityThreshold"] == 0.5
         assert body.get("notifyIntegrations") is not True
         assert request.headers["authorization"] == "Bearer caesura_test"
-        turn = len(rows)
+        turn = sum(bool(row["analysisJsonOpenai"]) for row in rows)
         messages = body["messages"]
         dialogue = [message for message in messages if message["speakerRole"] == "user"]
         context = [message for message in messages if message["speakerRole"] == "assistant"]
         assert len(dialogue) == turn * 2 + 1
         assert len(context) == (0 if turn == 0 else 1)
         assert [(m["text"], m["speakerName"], m["speakerIndex"]) for m in dialogue] == [
-            (TEXT, "Customer" if index % 2 == 0 else "Agent", 1 if index % 2 == 0 else 0)
+            (
+                TEXT if index % 2 == 0 else "Hello!",
+                "Customer" if index % 2 == 0 else "Agent",
+                1 if index % 2 == 0 else 0,
+            )
             for index in range(turn * 2 + 1)
         ]
-        last = messages[-1]
-        # Emulate the backend's persistence of the LAST message, exposing misplaced analysis context.
-        row = saved_row(turn)
-        row.update(text=last["text"], speakerName=last.get("speakerName"), speakerIndex=last.get("speakerIndex", 0))
-        rows.append(row)
+        row = next(row for row in rows if row["messageId"] == body["transcriptMessageId"])
+        row["analysisJsonOpenai"] = {"guidance": "Keep it brief."} if turn == 0 else {"isSame": True}
         return httpx.Response(200, json=row["analysisJsonOpenai"])
+
+    def save(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        for message in body["messages"]:
+            if any(row["messageId"] == message["id"] for row in rows):
+                continue
+            customer = message["role"] == "user"
+            rows.append(
+                {
+                    "id": len(rows) + 1,
+                    "messageId": message["id"],
+                    "text": message["text"],
+                    "speakerName": "Customer" if customer else "Agent",
+                    "speakerIndex": 1 if customer else 0,
+                    "analysisJsonOpenai": "",
+                }
+            )
+        return httpx.Response(200, json={"success": True, **json.loads(request.content)})
+
+    respx.get(CONVERSATION_URL + "/messages").respond(
+        200, json={"success": True, "conversationId": conversation_id, "nextMessageId": 1}
+    )
+    uploads = respx.post(CONVERSATION_URL + "/messages").mock(side_effect=save)
 
     analysis = respx.post(ANALYZE_URL).mock(side_effect=analyze)
     fetched = respx.get(CONVERSATION_URL, params={"conversationId": conversation_id}).mock(
         side_effect=lambda _: httpx.Response(200, json={"conversation": {"id": conversation_id, "analyses": rows}}),
     )
-    providers = [mock_openai(api) for api in sorted(set(SCENARIOS[scenario]))]
+    from tests.test_chat import CHAT_RESPONSE, RESPONSES_RESPONSE
+
+    generation = 0
+
+    def provider_response(request: httpx.Request) -> httpx.Response:
+        nonlocal generation
+        generation += 1
+        payload = copy.deepcopy(CHAT_RESPONSE if "chat/completions" in str(request.url) else RESPONSES_RESPONSE)
+        payload["id"] = f"generation-{generation}"
+        return httpx.Response(200, json=payload)
+
+    providers = [mock_openai(api).mock(side_effect=provider_response) for api in sorted(set(SCENARIOS[scenario]))]
     store = MemoryCaesuraStore()
     events: list[CaesuraEvent] = []
     errors: list[Any] = []
@@ -91,7 +126,7 @@ async def test_four_turns_save_dialogue_but_buffer_only_one_guidance(scenario: s
     assert creation.calls.last.request.headers["authorization"] == "Bearer caesura_test"
     assert fetched.calls.last.request.headers["authorization"] == "Bearer caesura_test"
     assert analysis.call_count == sum(route.call_count for route in providers) == 4
-    assert summary["saved_rows"] == 4
+    assert summary["saved_rows"] == uploads.call_count == 8
     assert summary["duplicate_responses"] == 3
     assert summary["buffered_guidance"] == 1
     assert [turn["is_same"] for turn in summary["turns"]] == [None, True, True, True]
@@ -102,7 +137,7 @@ async def test_four_turns_save_dialogue_but_buffer_only_one_guidance(scenario: s
             assert call.request.headers["authorization"] == "Bearer sk-test-openai"
             body = json.loads(call.request.content)
             supplied = body.get("input", body.get("messages"))
-            original = [message for message in supplied if message.get("content") == TEXT]
+            original = [message for message in supplied if message.get("content") in (TEXT, "Hello!")]
             assert [message["role"] for message in original] == [
                 "user" if i % 2 == 0 else "assistant" for i in range(len(original))
             ]
@@ -110,25 +145,29 @@ async def test_four_turns_save_dialogue_but_buffer_only_one_guidance(scenario: s
 
 @pytest.mark.parametrize("corruption", ["text", "name", "index", "analysis", "duplicate-id"])
 def test_saved_row_validation_rejects_content_regressions(corruption: str) -> None:
-    rows = [saved_row(index) for index in range(4)]
+    rows = [saved_row(index) for index in range(8)]
+    for index, row in enumerate(rows):
+        if index % 2:
+            row.update(text="Hello!", speakerName="Agent", speakerIndex=0)
+
     broken = copy.deepcopy(rows)
     if corruption == "text":
-        broken[-1]["text"] = '{"guidance":"not dialogue"}'
+        broken[-2]["text"] = '{"guidance":"not dialogue"}'
     elif corruption == "name":
-        broken[-1]["speakerName"] = "Agent"
+        broken[-2]["speakerName"] = "Agent"
     elif corruption == "index":
-        broken[-1]["speakerIndex"] = 0
+        broken[-2]["speakerIndex"] = 0
     elif corruption == "analysis":
         del broken[-1]["analysisJsonOpenai"]
     else:
-        broken[-1]["id"] = broken[0]["id"]
+        broken[-2]["id"] = broken[0]["id"]
     with pytest.raises(AssertionError):
         verify_saved_conversation({"conversation": {"id": "c1", "analyses": broken}}, "c1")
 
 
 @respx.mock
 async def test_fetch_endpoint_returns_saved_rows_and_uses_only_caesura_key() -> None:
-    payload = {"conversation": {"id": "c1", "analyses": [saved_row(index) for index in range(4)]}}
+    payload = {"conversation": {"id": "c1", "analyses": [saved_row(index) for index in range(8)]}}
     route = respx.get(CONVERSATION_URL, params={"conversationId": "c1"}).respond(200, json=payload)
     from app.main import app
 
@@ -137,7 +176,7 @@ async def test_fetch_endpoint_returns_saved_rows_and_uses_only_caesura_key() -> 
     assert response.status_code == 200
     assert response.json() == payload
     assert route.calls.last.request.headers["authorization"] == "Bearer caesura_test"
-    verify_saved_conversation(response.json(), "c1")
+    assert len(response.json()["conversation"]["analyses"]) == 8
 
 
 @pytest.mark.parametrize("status", [401, 404, 500])

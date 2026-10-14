@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     openai_api_key: str
+    caesura_base_url: str = "https://api.caesurao.com"
     caesura_api_key: str
     caesura_persist: bool = True
     caesura_mode: Literal["async", "sync"] = "sync"

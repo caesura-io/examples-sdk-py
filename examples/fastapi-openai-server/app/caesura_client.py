@@ -21,6 +21,8 @@ openai = create_async_caesura(
     AsyncOpenAI(api_key=settings.openai_api_key),
     CaesuraOpenAIOptions(
         api_key=settings.caesura_api_key,
+        base_url=settings.caesura_base_url,
+        failure_policy="raise",
         mode=settings.caesura_mode,
         persist=settings.caesura_persist,
         speaker_names=SpeakerNames(agent=settings.caesura_agent_name, customer="Customer"),

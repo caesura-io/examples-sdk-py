@@ -31,13 +31,15 @@ def verify_saved_conversation(data: dict[str, Any], conversation_id: str) -> lis
     conversation = data["conversation"]
     require(conversation["id"] == conversation_id, "Fetched a different conversation")
     rows = conversation["analyses"]
-    require(isinstance(rows, list) and len(rows) == 4, "Expected four saved dialogue/analysis rows")
+    require(isinstance(rows, list) and len(rows) == 8, "Expected four customer messages and four actual agent replies")
     require(all(isinstance(row, dict) and isinstance(row.get("id"), int) for row in rows), "Invalid analysis row IDs")
     ordered: list[dict[str, Any]] = sorted(rows, key=lambda row: row["id"])
-    require(len({row["id"] for row in ordered}) == 4, "Expected four distinct analysis rows")
+    require(len({row["id"] for row in ordered}) == 8, "Expected eight distinct dialogue rows")
     for turn, row in enumerate(ordered):
-        name, index = "Customer", 1
-        require(row.get("text") == TEXT, f"Turn {turn + 1}: incorrect saved dialogue text")
+        name, index = ("Customer", 1) if turn % 2 == 0 else ("Agent", 0)
+        require(bool(row.get("text")), f"Turn {turn + 1}: missing saved dialogue text")
+        if turn % 2 == 0:
+            require(row.get("text") == TEXT, f"Turn {turn + 1}: incorrect customer text")
         require(row.get("speakerName") == name, f"Turn {turn + 1}: incorrect saved speaker name")
         require(row.get("speakerIndex") == index, f"Turn {turn + 1}: incorrect saved speaker index")
         # A deduped row may have an empty analysis value. Never assume a particular payload shape.
@@ -53,15 +55,15 @@ async def run_scenario(
     errors: list[Any],
 ) -> dict[str, Any]:
     conversation_id = await client.create_conversation(name=f"CaesuraO Python four-turn check: {scenario}")
+    if conversation_id is None:
+        raise RuntimeError("CaesuraO did not create a conversation")
     print(json.dumps({"scenario": scenario, "conversation_id": conversation_id}), flush=True)
     history: list[dict[str, Any]] = []
     turn_results: list[dict[str, Any]] = []
     for turn, api in enumerate(SCENARIOS[scenario]):
         role = "user"
-        if history:
-            history.append({"role": "assistant", "content": TEXT})
         name, index = ("Customer", 1) if role == "user" else ("Agent", 0)
-        # Controlled input dialogue, not the model's generated reply.
+        # Use actual completed provider replies in subsequent history.
         history.append({"role": role, "content": TEXT})
         start, error_start = len(events), len(errors)
         if api == "responses":
@@ -78,6 +80,9 @@ async def run_scenario(
                 max_completion_tokens=64,
                 caesura_conversation_id=conversation_id,
             )
+        reply = result.output_text if api == "responses" else result.choices[0].message.content
+        require(isinstance(reply, str) and bool(reply), f"Turn {turn + 1}: missing completed agent reply")
+        history.append({"role": "assistant", "content": reply})
         require(bool(result.id), f"Turn {turn + 1}: missing OpenAI response")
         require(len(errors) == error_start, f"Turn {turn + 1}: CaesuraO analysis failed")
         current = events[start:]
@@ -130,6 +135,8 @@ async def run(scenarios: list[str], threshold: float | None) -> None:
             raw,
             CaesuraOpenAIOptions(
                 api_key=settings.caesura_api_key,
+                base_url=settings.caesura_base_url,
+                failure_policy="raise",
                 mode="sync",
                 persist=True,
                 calculate_similarities=True,

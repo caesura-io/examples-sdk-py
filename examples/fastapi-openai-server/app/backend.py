@@ -3,7 +3,6 @@
 from typing import Any
 
 import httpx
-from caesura_openai import CaesuraOpenAIOptions
 
 from app.config import settings
 
@@ -12,7 +11,7 @@ async def fetch_conversation(conversation_id: str) -> dict[str, Any]:
     # The SDK currently exposes creation, but no conversation-read method.
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(
-            f"{CaesuraOpenAIOptions().base_url}/api/conversation",
+            f"{settings.caesura_base_url.rstrip('/')}/api/conversation",
             params={"conversationId": conversation_id},
             headers={"Authorization": f"Bearer {settings.caesura_api_key}"},
         )

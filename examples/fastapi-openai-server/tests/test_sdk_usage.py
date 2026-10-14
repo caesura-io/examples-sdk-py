@@ -7,6 +7,7 @@ import copy
 import json
 from typing import Any, Literal
 
+import httpx
 import pytest
 import respx
 from caesura_core import AnalysisContext, AnalyzeMessage, CaesuraEvent, CustomerTurn, MemoryCaesuraStore
@@ -139,6 +140,14 @@ def test_analysis_values_keep_their_shape(value: Any) -> None:
 
 @respx.mock
 def test_explicit_creation_and_reuse_across_apis() -> None:
+    respx.get("https://api.caesurao.com/api/conversation/messages").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"success": True, "conversationId": request.url.params["conversationId"], "nextMessageId": 1}
+        )
+    )
+    respx.post("https://api.caesurao.com/api/conversation/messages").mock(
+        side_effect=lambda request: httpx.Response(200, json={"success": True, **json.loads(request.content)})
+    )
     creation = respx.post("https://api.caesurao.com/api/conversation").respond(200, json={"id": "backend-id"})
     analysis = respx.post(CAESURA_URL).respond(200, json={"guidance": GUIDANCE})
     mock_openai("chat")
@@ -149,6 +158,7 @@ def test_explicit_creation_and_reuse_across_apis() -> None:
         CaesuraOpenAIOptions(api_key="caesura_test", mode="sync", store=store),
     ) as client:
         conversation_id = client.create_conversation()
+        assert conversation_id is not None
         client.responses.create(model="gpt-5.4-mini", input="Hello", caesura_conversation_id=conversation_id)
         client.chat.completions.create(
             model="gpt-5.4-mini",

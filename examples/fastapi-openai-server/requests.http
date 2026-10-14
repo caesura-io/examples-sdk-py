@@ -15,6 +15,17 @@ Content-Type: application/json
 
 {"conversationId":"{{conversationId}}","input":[{"role":"user","content":"Can you help me prepare for a meeting?"}]}
 
+> {%
+  client.assert(response.status === 200, "Response failed");
+  const reply = response.body.output
+    .filter(item => item.type === "message" && item.role === "assistant")
+    .flatMap(item => item.content)
+    .filter(part => part.type === "output_text")
+    .map(part => part.text).join("");
+  client.assert(reply.length > 0, "Assistant reply missing");
+  client.global.set("firstReplyJson", JSON.stringify(reply));
+%}
+
 ### Continue the same conversation using Chat Completions
 POST http://localhost:8000/v1/chat/completions
 Content-Type: application/json
@@ -23,11 +34,11 @@ Content-Type: application/json
   "conversationId":"{{conversationId}}",
   "messages":[
     {"role":"user","content":"Can you help me prepare for a meeting?"},
-    {"role":"assistant","content":"What is the meeting about?"},
+    {"role":"assistant","content":{{firstReplyJson}}},
     {"role":"user","content":"Planning our next release."}
   ],
   "stream":true
 }
 
-### Fetch saved customer analyses (not a full transcript archive)
+### Fetch saved customer messages, agent replies, and analyses
 GET http://localhost:8000/caesura/conversations/{{conversationId}}

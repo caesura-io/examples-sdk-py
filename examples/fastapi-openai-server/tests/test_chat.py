@@ -11,12 +11,14 @@ from uuid import uuid4
 import httpx
 import pytest
 import respx
+from caesura_core import TransportError
 from caesura_openai import CaesuraOpenAIOptions, create_async_caesura
 from openai import AsyncOpenAI
 
 # Override shell credentials/config before importing the singleton client.
 os.environ["OPENAI_API_KEY"] = "sk-test-openai"
 os.environ["CAESURA_API_KEY"] = "caesura_test"
+os.environ["CAESURA_BASE_URL"] = "https://api.caesurao.com"
 os.environ["CAESURA_MODE"] = "sync"
 os.environ["CAESURA_PERSIST"] = "false"
 
@@ -237,12 +239,11 @@ async def test_persist_false_retains_authoritative_conversation_id() -> None:
 
 
 @respx.mock
-async def test_caesura_auth_failure_is_logged_but_openai_still_responds(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_caesura_auth_failure_stops_provider(capsys: pytest.CaptureFixture[str]) -> None:
     respx.post(CAESURA_URL).respond(401, json={"error": "Expired API key"})
-    provider = mock_openai("chat")
-    response = await post("/v1/chat/completions", request_body("chat", uuid4().hex))
-    assert response.status_code == 200
-    assert provider.call_count == 1
+    with pytest.raises(TransportError):
+        await post("/v1/chat/completions", request_body("chat", uuid4().hex))
+    assert len(respx.calls) == 1
     assert "Analysis transport failed" in capsys.readouterr().err
 
 
@@ -267,6 +268,14 @@ async def persistent_client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[No
 @pytest.mark.usefixtures("persistent_client")
 @respx.mock
 async def test_create_conversation_once_and_reuse_for_persisted_turns(api: str) -> None:
+    respx.get("https://api.caesurao.com/api/conversation/messages").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"success": True, "conversationId": request.url.params["conversationId"], "nextMessageId": 1}
+        )
+    )
+    uploads = respx.post("https://api.caesurao.com/api/conversation/messages").mock(
+        side_effect=lambda request: httpx.Response(200, json={"success": True, **json.loads(request.content)})
+    )
     creation = respx.post("https://api.caesurao.com/api/conversation").respond(
         200,
         json={"success": True, "id": "backend-conversation"},
@@ -292,6 +301,7 @@ async def test_create_conversation_once_and_reuse_for_persisted_turns(api: str) 
         assert response.status_code == 200
     assert creation.call_count == 1
     assert analysis.call_count == provider.call_count == 2
+    assert uploads.call_count == 4
     for call in analysis.calls:
         body = json.loads(call.request.content)
         assert body["sessionId"] == body["conversationId"] == "backend-conversation"
@@ -331,19 +341,34 @@ async def test_fastapi_mixed_apis_share_guidance_and_persist_customer_turns() ->
         assert body["sessionId"] == "mixed-id"
         assert body.get("notifyIntegrations") is not True
         context = [message for message in body["messages"] if message["speakerRole"] == "assistant"]
-        assert len(context) == (1 if rows else 0)
-        last = body["messages"][-1]
-        payload = {"guidance": GUIDANCE} if not rows else {"isSame": True}
-        rows.append(
-            {
-                "id": len(rows) + 1,
-                "text": last["text"],
-                "speakerName": last.get("speakerName"),
-                "speakerIndex": last.get("speakerIndex", 0),
-                "analysisJsonOpenai": payload,
-            }
-        )
+        turn = sum(bool(row["analysisJsonOpenai"]) for row in rows)
+        assert len(context) == (1 if turn else 0)
+        payload = {"guidance": GUIDANCE} if not turn else {"isSame": True}
+        row = next(row for row in rows if row["messageId"] == body["transcriptMessageId"])
+        row["analysisJsonOpenai"] = payload
         return httpx.Response(200, json=payload)
+
+    def save(request: httpx.Request) -> httpx.Response:
+        for message in json.loads(request.content)["messages"]:
+            customer = message["role"] == "user"
+            rows.append(
+                {
+                    "id": len(rows) + 1,
+                    "messageId": message["id"],
+                    "text": message["text"],
+                    "speakerName": "Customer" if customer else "Agent",
+                    "speakerIndex": 1 if customer else 0,
+                    "analysisJsonOpenai": "",
+                }
+            )
+        return httpx.Response(200, json={"success": True, **json.loads(request.content)})
+
+    respx.get("https://api.caesurao.com/api/conversation/messages").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"success": True, "conversationId": request.url.params["conversationId"], "nextMessageId": 1}
+        )
+    )
+    respx.post("https://api.caesurao.com/api/conversation/messages").mock(side_effect=save)
 
     respx.post(CAESURA_URL).mock(side_effect=analyze)
     respx.get("https://api.caesurao.com/api/conversation", params={"conversationId": "mixed-id"}).mock(
@@ -376,3 +401,25 @@ async def test_fastapi_mixed_apis_share_guidance_and_persist_customer_turns() ->
         for call in provider.calls:
             body = json.loads(call.request.content)
             assert GUIDANCE in json.dumps(body.get("messages", body.get("input")))
+
+
+@pytest.mark.usefixtures("persistent_client")
+@respx.mock
+async def test_optional_greeting_is_saved_without_analysis() -> None:
+    respx.post("https://api.caesurao.com/api/conversation").respond(200, json={"id": "greeting-conversation"})
+    respx.get("https://api.caesurao.com/api/conversation/messages").mock(
+        side_effect=lambda request: httpx.Response(
+            200, json={"success": True, "conversationId": request.url.params["conversationId"], "nextMessageId": 1}
+        )
+    )
+    uploads = respx.post("https://api.caesurao.com/api/conversation/messages").mock(
+        side_effect=lambda request: httpx.Response(200, json={"success": True, **json.loads(request.content)})
+    )
+    response = await post("/caesura/conversations", {"name": "Greeting example", "greeting": "Welcome"})
+    assert response.status_code == 201
+    assert response.json() == {"id": "greeting-conversation", "greeting": "Welcome"}
+    assert json.loads(uploads.calls.last.request.content) == {
+        "conversationId": "greeting-conversation",
+        "messages": [{"id": 1, "role": "assistant", "text": "Welcome"}],
+    }
+    assert len(respx.calls) == 3

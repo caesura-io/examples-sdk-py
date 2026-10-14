@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 class ConversationCreateRequest(BaseModel):
     """Optional metadata for a new CaesuraO backend conversation."""
 
+    greeting: str | None = None
     name: str | None = None
     calendar_id: str | None = Field(default=None, alias="calendarId")
     event_id: str | None = Field(default=None, alias="eventId")
