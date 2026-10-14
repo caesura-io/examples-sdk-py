@@ -30,6 +30,10 @@ conversation ownership checks before deploying it publicly.
 | `POST /v1/responses/stream` | Same input, SSE output |
 | `POST /v1/chat/completions` | `messages`, `conversationId`, optional `model`, `stream` |
 
+`CAESURA_BASE_URL` optionally overrides the default `https://api.caesurao.com`
+endpoint. Restart the server after changing `.env`; create a new conversation when
+switching endpoints or accounts.
+
 Both model APIs require `conversationId`, including when `CAESURA_PERSIST=false`.
 Create once and save the returned ID; starting a new conversation requires explicit
 creation. An ID does not load previous messages. Supply growing dialogue history
